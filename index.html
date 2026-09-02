@@ -53,6 +53,7 @@
   .hud .stat .label{color:var(--text-mute);font-size:8px;letter-spacing:1px;}
   .hud .stat .value{color:var(--paper);font-weight:800;font-size:13px;display:flex;align-items:center;gap:4px;}
   .coin-ico{display:inline-block;width:11px;height:11px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--gold-bright),var(--gold) 60%,#8a6414 100%);border:1px solid #8a6414;flex:none;}
+  .coins-negative{color:#ff6b57 !important;}
   .xpbar{width:96px;height:10px;background:#000;border:2px solid var(--steel);position:relative;}
   .xpbar-fill{position:absolute;inset:0;background:linear-gradient(90deg,var(--gold),var(--gold-bright));width:0%;transition:width .35s ease;}
   .hud-btn{
@@ -273,7 +274,7 @@
   </div>
 
   <div style="font-size:10px;color:var(--text-mute);text-align:center;padding:4px 0;">
-    Built for Year 10 Geography &middot; Facts sourced from GNS Science / GeoNet, NEMA Civil Defence, NZ History (Manatū Taonga) &amp; Wikipedia &middot; Progress is kept only for this play session
+    Built for Year 10 Geography &middot; Facts sourced from GNS Science / GeoNet, NEMA Civil Defence, NZ History (Manatū Taonga) &amp; Wikipedia &middot; Progress auto-saves in this browser, on this device only
   </div>
 </div>
 
@@ -303,7 +304,7 @@
         <div><kbd>Space</kbd> / <kbd>Enter</kbd> — talk to whoever you’re facing</div>
         <div>On touch devices, use the on-screen pad below the map.</div>
       </div>
-      <p class="dlg-note">Note: this game keeps your progress only for the current browser session — reloading the page starts a fresh run.</p>
+      <p class="dlg-note" id="title-save-note">Note: this game auto-saves your progress in this browser, on this device — closing the tab and coming back later will pick up right where you left off. Playing on a different device, browser, or in private/incognito mode won’t carry your progress over. Use <b>Restart Training</b> in the top bar any time to wipe your save and begin again.</p>
     </div>
     <div class="modal-foot">
       <button class="btn" id="btn-start">Start Training</button>
@@ -324,6 +325,7 @@
         <div>Stuck? Hit <b>Hint</b> — it costs a few coins but gives you a clue.</div>
         <div>Wrong answers cost a few coins too, so read carefully before choosing.</div>
         <div>Characters marked "bonus" are optional — good for extra coins and harder challenge questions.</div>
+        <div><b>Watch for THE SIREN</b> — a flashing red figure that sometimes appears in a zone. Answer its question right for a big coin bonus; answer wrong and it takes a big chunk of your gold, even into the negatives. You can walk away without answering if you don’t want to risk it.</div>
         <div>Finish all five zones, then find the Examiner at the Hazard Ranger Exam for your final assessment.</div>
       </div>
     </div>
@@ -335,7 +337,7 @@
 <div class="overlay" id="overlay-reset" hidden>
   <div class="modal">
     <div class="modal-head"><h3>RESTART TRAINING?</h3></div>
-    <div class="modal-body"><p>This clears all coins, XP, and Hazard Files, and starts you over at the GNS Field Station. This can’t be undone.</p></div>
+    <div class="modal-body"><p>This clears all coins, XP, and Hazard Files — including your saved progress in this browser — and starts you over at the GNS Field Station. This can’t be undone.</p></div>
     <div class="modal-foot">
       <button class="btn ghost" id="btn-reset-cancel">Cancel</button>
       <button class="btn" id="btn-reset-confirm">Restart</button>
@@ -1101,6 +1103,109 @@ var EXAM_QUESTIONS = [
 ];
 
 /* =========================================================
+   THE SIREN — a random, high-stakes roaming encounter.
+   Appears sometimes when you enter a zone, flashing red.
+   Get its question wrong and it takes a big chunk of your
+   gold — even into the negatives. Get it right and it pays out.
+========================================================= */
+var SIREN_ZONES = ['quake','volcano','storm','command'];
+var SIREN_SPAWN_CHANCE = 0.3;
+var SIREN_PENALTY = 40;
+var SIREN_REWARD_COINS = 30;
+var SIREN_REWARD_XP = 15;
+var sirenState = { question:null };
+
+function findOpenTile(zone){
+  var tries = 30;
+  while(tries-- > 0){
+    var x = 1+Math.floor(Math.random()*(COLS-2));
+    var y = 1+Math.floor(Math.random()*(ROWS-2));
+    if(zone.terrain[y] && zone.terrain[y][x]==='.' && !objAt(zone,x,y)) return {x:x,y:y};
+  }
+  return null;
+}
+
+function removeSirenFromZones(){
+  SIREN_ZONES.forEach(function(zid){
+    var z = ZONES[zid];
+    z.objects = z.objects.filter(function(o){ return !o.isSiren; });
+  });
+}
+
+function maybeSpawnSiren(zone){
+  removeSirenFromZones();
+  if(state.preview) return;
+  if(SIREN_ZONES.indexOf(zone.id) === -1) return;
+  if(Math.random() >= SIREN_SPAWN_CHANCE) return;
+  var tile = findOpenTile(zone);
+  if(!tile) return;
+  zone.objects.push({kind:'npc', id:'theSiren', x:tile.x, y:tile.y, hat:'hood', color:'#8a1f1f', isSiren:true});
+}
+
+function openSirenEncounter(){
+  removeSirenFromZones();
+  currentNpcId = null;
+  dialogOpen = true;
+  stopSpeaking();
+  sirenState.question = EXAM_QUESTIONS[Math.floor(Math.random()*EXAM_QUESTIONS.length)];
+  document.getElementById('dlg-name').textContent = 'THE SIREN';
+  document.getElementById('dlg-role').textContent = 'No warning. No second chance.';
+  document.getElementById('dlg-badge').style.background = '#8a1f1f';
+  document.getElementById('overlay-dlg').hidden = false;
+  renderSirenEncounter();
+}
+
+function renderSirenEncounter(){
+  var body = document.getElementById('dlg-body'), foot = document.getElementById('dlg-foot');
+  body.innerHTML=''; foot.innerHTML='';
+  var warn = document.createElement('p');
+  warn.innerHTML = '<b>A siren cuts through the air, red light strobing.</b> Real hazards don’t wait for you to be ready. Answer this one question right now — get it wrong and you lose <b>' + SIREN_PENALTY + ' gold</b> straight away, even if your balance goes negative. Get it right and you’re rewarded for staying sharp.';
+  body.appendChild(warn);
+  var qP = document.createElement('p'); qP.style.cssText='font-weight:700;margin-top:10px;'; qP.textContent = sirenState.question.q;
+  body.appendChild(qP);
+  var optList = document.createElement('div'); optList.className='opt-list';
+  sirenState.question.options.forEach(function(optText, idx){
+    var b = document.createElement('button'); b.className='opt-btn'; b.textContent = optText;
+    b.onclick = function(){ onSirenAnswer(idx, optList); };
+    optList.appendChild(b);
+  });
+  body.appendChild(optList);
+  var walkBtn = document.createElement('button'); walkBtn.className='btn ghost small'; walkBtn.textContent='Not Now'; walkBtn.onclick=closeDialog;
+  foot.appendChild(walkBtn);
+}
+
+function onSirenAnswer(idx, optList){
+  Array.prototype.forEach.call(optList.children, function(c){ c.disabled = true; });
+  if(idx === sirenState.question.correct){
+    optList.children[idx].classList.add('correct');
+    addCoins(SIREN_REWARD_COINS);
+    state.xp += SIREN_REWARD_XP;
+    updateHud(); updateJournal();
+    setTimeout(function(){ renderSirenResult(true); }, 700);
+  } else {
+    optList.children[idx].classList.add('wrong');
+    optList.children[sirenState.question.correct].classList.add('correct');
+    addCoins(-SIREN_PENALTY, true);
+    setTimeout(function(){ renderSirenResult(false); }, 1200);
+  }
+}
+
+function renderSirenResult(won){
+  var body = document.getElementById('dlg-body'), foot = document.getElementById('dlg-foot');
+  body.innerHTML=''; foot.innerHTML='';
+  var banner = document.createElement('div');
+  banner.className = 'grade-banner' + (won ? '' : ' fail');
+  if(won){
+    banner.innerHTML = '<div class="grade">SHARP EYES</div><div class="sub">You answered before the siren faded. +' + SIREN_REWARD_COINS + ' gold, +' + SIREN_REWARD_XP + ' XP.</div>';
+  } else {
+    banner.innerHTML = '<div class="grade">CAUGHT OUT</div><div class="sub">Wrong call under pressure — ' + SIREN_PENALTY + ' gold gone, whatever your balance was. Real hazards don’t give warnings twice. Stay ready.</div>';
+  }
+  body.appendChild(banner);
+  var doneBtn = document.createElement('button'); doneBtn.className='btn'; doneBtn.textContent='Continue'; doneBtn.onclick=closeDialog;
+  foot.appendChild(doneBtn);
+}
+
+/* =========================================================
    PROGRESS CHECKLIST
 ========================================================= */
 var CHECKLIST_ITEMS = [
@@ -1125,9 +1230,50 @@ var state = {
   examScore:null, examCoins:0
 };
 
+/* =========================================================
+   SAVE / RESUME (localStorage — this device/browser only)
+========================================================= */
+var SAVE_KEY = 'hazardRangerAotearoa_save_v1';
+var storageOk = true;
+function saveGame(){
+  if(!storageOk || !state.started || state.preview) return;
+  try{
+    var data = {
+      zone: state.zone, px: state.px, py: state.py, dir: state.dir,
+      xp: state.xp, coins: state.coins,
+      cards: state.cards, solved: state.solved, hintUsed: state.hintUsed,
+      examScore: state.examScore, examCoins: state.examCoins
+    };
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  } catch(e){ storageOk = false; }
+}
+function loadGame(){
+  try{
+    var raw = window.localStorage.getItem(SAVE_KEY);
+    if(!raw) return false;
+    var data = JSON.parse(raw);
+    if(!data || !ZONES[data.zone]) return false;
+    state.zone = data.zone;
+    state.px = (typeof data.px==='number' && data.px>=0 && data.px<COLS) ? data.px : 2;
+    state.py = (typeof data.py==='number' && data.py>=0 && data.py<ROWS) ? data.py : 6;
+    state.dir = (['up','down','left','right'].indexOf(data.dir) !== -1) ? data.dir : 'up';
+    state.xp = data.xp || 0;
+    state.coins = (typeof data.coins==='number') ? data.coins : START_COINS;
+    state.cards = data.cards || {};
+    state.solved = data.solved || {};
+    state.hintUsed = data.hintUsed || {};
+    state.examScore = (typeof data.examScore==='number') ? data.examScore : null;
+    state.examCoins = data.examCoins || 0;
+    return true;
+  } catch(e){ storageOk = false; return false; }
+}
+function clearSave(){
+  try{ window.localStorage.removeItem(SAVE_KEY); } catch(e){}
+}
+
 function xpToLevel(xp){ return 1 + Math.floor(xp/60); }
 function cardCount(){ var n=0; for(var k in state.cards){ if(state.cards[k]) n++; } return n; }
-function addCoins(n){ state.coins = Math.max(0, state.coins + n); updateHud(); }
+function addCoins(n, allowNegative){ state.coins = allowNegative ? (state.coins + n) : Math.max(0, state.coins + n); updateHud(); }
 function badgeCount(){
   var n = 0;
   ['hq','quake','volcano','storm','command'].forEach(function(zid){
@@ -1318,6 +1464,23 @@ function drawHat(hat, color){
   else if(hat==='cap'){ ctx.fillStyle=shadeColor(color,20); ctx.beginPath(); ctx.arc(0,-21,7,Math.PI,0); ctx.fill(); ctx.fillRect(-2,-21,10,3); }
   else if(hat==='star'){ ctx.fillStyle='#ffce6b'; ctx.save(); ctx.translate(0,-23); for(var i=0;i<5;i++){ ctx.rotate(Math.PI*2/5); ctx.fillRect(-1,-4,2,4); } ctx.restore(); }
   else if(hat==='ranger'){ ctx.fillStyle='#e8622c'; ctx.beginPath(); ctx.ellipse(0,-21,8,4,0,0,Math.PI,true); ctx.fill(); ctx.fillRect(-8,-21,16,3); ctx.fillStyle='#ffce6b'; ctx.fillRect(-2,-24,4,3); }
+  else if(hat==='hood'){ ctx.fillStyle='#2a0e0e'; ctx.beginPath(); ctx.moveTo(-9,-8); ctx.quadraticCurveTo(-9,-27,0,-27); ctx.quadraticCurveTo(9,-27,9,-8); ctx.quadraticCurveTo(9,-13,0,-13); ctx.quadraticCurveTo(-9,-13,-9,-8); ctx.closePath(); ctx.fill(); }
+}
+function drawSirenNpc(o){
+  var cx = o.x*TILE+TILE/2, cy = o.y*TILE+TILE/2+8;
+  var pulse = REDUCED_MOTION ? 0.5 : (0.5+0.5*Math.sin(animT*0.18));
+  var glowR = 15+pulse*7;
+  var grad = ctx.createRadialGradient(cx,cy,2,cx,cy,glowR);
+  grad.addColorStop(0,'rgba(220,40,30,'+(0.45+pulse*0.35).toFixed(2)+')');
+  grad.addColorStop(1,'rgba(220,40,30,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx,cy,glowR,0,Math.PI*2); ctx.fill();
+  var col = pulse>0.55 ? '#e2493a' : '#5c1a16';
+  drawCharacter(cx, cy, col, 'hood', 0, 0);
+  ctx.fillStyle = '#ffce6b';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('⚠', o.x*TILE+TILE/2, o.y*TILE-2);
 }
 
 /* =========================================================
@@ -1348,6 +1511,7 @@ function render(){
   });
   z.objects.forEach(function(o){
     if(o.kind==='npc'){
+      if(o.isSiren){ drawSirenNpc(o); return; }
       var npc = NPCS[o.id];
       var bob = REDUCED_MOTION?0:Math.sin(animT*0.06 + o.x)*1.2;
       drawCharacter(o.x*TILE+TILE/2, o.y*TILE+TILE/2, npc.color, o.hat, bob, animT*0.08+o.x);
@@ -1432,6 +1596,7 @@ function checkExit(z){
     var toZone = ZONES[obj.to];
     state.zone = obj.to;
     state.px = obj.entry.x; state.py = obj.entry.y; state.dir = obj.entry.dir;
+    maybeSpawnSiren(toZone);
     updateZoneBanner();
     updateJournal();
     showToast('Entered ' + toZone.name);
@@ -1445,7 +1610,10 @@ function interact(){
   var fx = state.px+o[0], fy = state.py+o[1];
   var target = objAt(z, fx, fy);
   if(!target) return;
-  if(target.kind==='npc'){ openNpc(target.id); return; }
+  if(target.kind==='npc'){
+    if(target.isSiren){ openSirenEncounter(); } else { openNpc(target.id); }
+    return;
+  }
   if(target.kind==='barrier'){
     var cleared = target.requires.every(function(id){ return !!state.solved[id]; });
     if(!cleared && !state.preview){
@@ -1838,8 +2006,11 @@ function updateHud(){
   document.getElementById('hud-level').textContent = 'Lv ' + xpToLevel(state.xp);
   var xpInLevel = state.xp % 60;
   document.getElementById('hud-xpfill').style.width = Math.round(xpInLevel/60*100) + '%';
-  document.getElementById('hud-coins').innerHTML = '<span class="coin-ico"></span> ' + state.coins;
+  var coinsEl = document.getElementById('hud-coins');
+  coinsEl.innerHTML = '<span class="coin-ico"></span> ' + state.coins;
+  coinsEl.classList.toggle('coins-negative', state.coins < 0);
   document.getElementById('hud-badges').textContent = badgeCount() + '/6';
+  saveGame();
 }
 function updateZoneBanner(){
   var z = currentZone();
@@ -1847,6 +2018,7 @@ function updateZoneBanner(){
   if(activeSpeakBtn && activeSpeakBtn.id === 'btn-speak-zone' && nameEl.textContent !== z.name) stopSpeaking();
   nameEl.textContent = z.name;
   document.getElementById('zone-desc').textContent = z.desc;
+  saveGame();
 }
 var RS_GUIDE = [
   {cls:'r-reduction', label:'REDUCTION', text:'Lowering long-term risk BEFORE a hazard occurs — strict building codes, strengthening earthquake-prone buildings, and land-use planning that avoids hazard-prone zones.'},
@@ -1892,6 +2064,7 @@ function updateJournal(){
     });
   }
   updateMapTrack();
+  saveGame();
 }
 function updateMapTrack(){
   var track = document.getElementById('map-track');
@@ -1923,6 +2096,8 @@ function loop(){
 ========================================================= */
 function resetGame(){
   stopSpeaking();
+  removeSirenFromZones();
+  clearSave();
   state.zone='hq'; state.px=2; state.py=6; state.dir='up';
   state.xp=0; state.coins=START_COINS;
   state.cards={}; state.solved={}; state.hintUsed={};
@@ -1935,7 +2110,16 @@ function resetGame(){
    INIT / WIRING
 ========================================================= */
 function init(){
+  var hasSave = loadGame();
   updateZoneBanner(); updateHud(); updateJournal();
+  if(hasSave){
+    var startBtn = document.getElementById('btn-start');
+    startBtn.textContent = 'Continue Training';
+    var saveNote = document.getElementById('title-save-note');
+    if(saveNote){
+      saveNote.innerHTML = 'Welcome back, Ranger! Picking up where you left off in this browser — <b>' + currentZone().name + '</b>, ' + state.coins + ' gold, Level ' + xpToLevel(state.xp) + '. Use <b>Restart Training</b> in the top bar any time to wipe your save and begin fresh.';
+    }
+  }
   if(!speechSupported){
     var speakBtns = document.querySelectorAll('.speak-btn');
     for(var si=0; si<speakBtns.length; si++){ speakBtns[si].hidden = true; }
@@ -1955,6 +2139,7 @@ function init(){
     stopSpeaking();
     state.started = true;
     document.getElementById('overlay-title').hidden = true;
+    saveGame();
   });
 
   document.getElementById('btn-help').addEventListener('click', function(){ document.getElementById('overlay-help').hidden = false; });
@@ -1983,6 +2168,7 @@ function init(){
     btn.addEventListener('click', function(){
       var zid = btn.getAttribute('data-jump');
       state.preview = true; state.started = true;
+      removeSirenFromZones();
       document.getElementById('overlay-title').hidden = true;
       state.zone = zid;
       var z = ZONES[zid];
