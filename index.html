@@ -68,7 +68,9 @@
   @media (max-width:820px){.game-layout{grid-template-columns:1fr;}}
 
   .stage{border:3px solid var(--steel);background:#000;padding:10px;display:flex;flex-direction:column;gap:10px;}
-  .zone-banner{font-weight:800;letter-spacing:0.4px;font-size:12px;color:var(--gold-bright);background:var(--panel);border:2px solid var(--steel-dim);padding:8px 10px;}
+  .zone-banner{font-weight:800;letter-spacing:0.4px;font-size:12px;color:var(--gold-bright);background:var(--panel);border:2px solid var(--steel-dim);padding:8px 10px;display:flex;align-items:flex-start;gap:10px;}
+  .zone-banner-text{flex:1;min-width:0;}
+  .journal-head-titles{display:flex;align-items:baseline;gap:8px;}
   .zone-banner .desc{font-weight:500;font-size:11.5px;color:var(--text-mute);margin-top:6px;letter-spacing:0;}
   .canvas-frame{position:relative;width:100%;aspect-ratio:13/8;background:#000;border:2px solid var(--steel-dim);overflow:hidden;}
   #game{width:100%;height:100%;display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
@@ -233,8 +235,11 @@
   <div class="game-layout">
     <div class="stage">
       <div class="zone-banner">
-        <div id="zone-name">GNS FIELD STATION</div>
-        <div class="desc" id="zone-desc">Your training begins here.</div>
+        <div class="zone-banner-text">
+          <div id="zone-name">GNS FIELD STATION</div>
+          <div class="desc" id="zone-desc">Your training begins here.</div>
+        </div>
+        <button class="hud-btn speak-btn" id="btn-speak-zone" aria-label="Read this zone's description aloud" title="Read aloud">&#128266;</button>
       </div>
       <div class="canvas-frame">
         <canvas id="game" width="416" height="256" role="img" aria-label="Pixel-art game world. Use arrow keys to move your Hazard Ranger and Space to interact."></canvas>
@@ -253,7 +258,10 @@
     </div>
 
     <div class="journal">
-      <div class="journal-head"><span id="journal-title">FIELD JOURNAL</span><span id="journal-count">0/23</span></div>
+      <div class="journal-head">
+        <span class="journal-head-titles"><span id="journal-title">FIELD JOURNAL</span><span id="journal-count">0/23</span></span>
+        <button class="hud-btn speak-btn" id="btn-speak-journal" aria-label="Read this journal tab aloud" title="Read aloud">&#128266;</button>
+      </div>
       <div class="journal-tabs">
         <button class="journal-tab active" id="tab-data" data-tab="data">HAZARD FILES</button>
         <button class="journal-tab" id="tab-rs" data-tab="rs">THE 4 R’s</button>
@@ -285,8 +293,9 @@
         <h3>HAZARD RANGER: AOTEAROA</h3>
         <div class="role">A field-exploration quiz game on New Zealand’s natural hazards</div>
       </div>
+      <button class="hud-btn speak-btn" id="btn-speak-title" aria-label="Read this introduction aloud" title="Read aloud">&#128266;</button>
     </div>
-    <div class="modal-body">
+    <div class="modal-body" id="title-body">
       <p>Kia ora! You’ve just joined GNS Science as a trainee <b>Hazard Ranger</b>. Aotearoa New Zealand sits right on the edge of the Pacific "Ring of Fire" — which means earthquakes, volcanic eruptions, cyclones and floods are all part of life here.</p>
       <p>Walk through five training zones collecting Hazard Files, then sit the final Hazard Ranger Exam. Answer questions correctly to earn gold coins. Stuck? A hint will cost you a few coins. Get it wrong, and you’ll lose a few too — so think before you answer!</p>
       <div class="legend">
@@ -305,8 +314,8 @@
 <!-- Help overlay -->
 <div class="overlay" id="overlay-help" hidden>
   <div class="modal">
-    <div class="modal-head"><h3>HOW TO PLAY</h3></div>
-    <div class="modal-body">
+    <div class="modal-head"><h3>HOW TO PLAY</h3><button class="hud-btn speak-btn" id="btn-speak-help" aria-label="Read these instructions aloud" title="Read aloud">&#128266;</button></div>
+    <div class="modal-body" id="help-body">
       <div class="legend">
         <div><kbd>&#8592;&#8593;&#8594;&#8595;</kbd> / <kbd>WASD</kbd> — walk one tile</div>
         <div><kbd>Space</kbd> / <kbd>Enter</kbd> — talk to the character you’re facing</div>
@@ -1471,20 +1480,19 @@ function shuffle(arr){
    READ ALOUD (Web Speech API — works fully offline, no server needed)
 ========================================================= */
 var speechSupported = ('speechSynthesis' in window) && (typeof SpeechSynthesisUtterance !== 'undefined');
-var isSpeaking = false;
+var activeSpeakBtn = null;
 
-function updateSpeakBtn(){
-  var btn = document.getElementById('btn-speak');
+function setBtnSpeaking(btn, speaking){
   if(!btn) return;
-  btn.classList.toggle('speaking', isSpeaking);
-  btn.innerHTML = isSpeaking ? '&#9209;' : '&#128266;';
-  btn.title = isSpeaking ? 'Stop reading' : 'Read this aloud';
-  btn.setAttribute('aria-label', isSpeaking ? 'Stop reading aloud' : 'Read this aloud');
+  btn.classList.toggle('speaking', speaking);
+  btn.innerHTML = speaking ? '&#9209;' : '&#128266;';
+  var base = btn.getAttribute('data-label') || 'Read this aloud';
+  btn.title = speaking ? 'Stop reading' : base;
+  btn.setAttribute('aria-label', speaking ? 'Stop reading aloud' : base);
 }
 function stopSpeaking(){
   if(speechSupported) window.speechSynthesis.cancel();
-  isSpeaking = false;
-  updateSpeakBtn();
+  if(activeSpeakBtn){ setBtnSpeaking(activeSpeakBtn, false); activeSpeakBtn = null; }
 }
 function getDialogSpeakText(){
   var name = document.getElementById('dlg-name').textContent || '';
@@ -1493,24 +1501,37 @@ function getDialogSpeakText(){
   var bodyText = body ? (body.innerText || body.textContent || '') : '';
   return name + '. ' + role + '. ' + bodyText;
 }
-function toggleSpeak(){
+function getElSpeakText(id){
+  var el = document.getElementById(id);
+  return el ? (el.innerText || el.textContent || '') : '';
+}
+function getZoneSpeakText(){
+  return getElSpeakText('zone-name') + '. ' + getElSpeakText('zone-desc');
+}
+function getJournalSpeakText(){
+  return getElSpeakText('journal-title') + '. ' + getElSpeakText('journal-body');
+}
+function speakFrom(btn, text){
   if(!speechSupported){ showToast('Read-aloud isn’t supported in this browser', true); return; }
-  if(isSpeaking){ stopSpeaking(); return; }
-  var text = getDialogSpeakText().replace(/\s+/g, ' ').trim();
+  if(activeSpeakBtn === btn){ stopSpeaking(); return; }
+  stopSpeaking();
+  text = (text || '').replace(/\s+/g, ' ').trim();
   if(!text){ return; }
-  window.speechSynthesis.cancel();
   var utter = new SpeechSynthesisUtterance(text);
   utter.rate = 0.95; utter.pitch = 1;
-  utter.onend = function(){ isSpeaking = false; updateSpeakBtn(); };
+  utter.onend = function(){ if(activeSpeakBtn === btn){ setBtnSpeaking(btn, false); activeSpeakBtn = null; } };
   utter.onerror = function(e){
-    isSpeaking = false; updateSpeakBtn();
+    if(activeSpeakBtn === btn){ setBtnSpeaking(btn, false); activeSpeakBtn = null; }
     if(e && e.error && e.error !== 'interrupted' && e.error !== 'canceled'){
       showToast('Read-aloud isn’t available on this device right now', true);
     }
   };
   window.speechSynthesis.speak(utter);
-  isSpeaking = true;
-  updateSpeakBtn();
+  activeSpeakBtn = btn;
+  setBtnSpeaking(btn, true);
+}
+function toggleSpeak(){
+  speakFrom(document.getElementById('btn-speak'), getDialogSpeakText());
 }
 
 function openNpc(id){
@@ -1822,7 +1843,9 @@ function updateHud(){
 }
 function updateZoneBanner(){
   var z = currentZone();
-  document.getElementById('zone-name').textContent = z.name;
+  var nameEl = document.getElementById('zone-name');
+  if(activeSpeakBtn && activeSpeakBtn.id === 'btn-speak-zone' && nameEl.textContent !== z.name) stopSpeaking();
+  nameEl.textContent = z.name;
   document.getElementById('zone-desc').textContent = z.desc;
 }
 var RS_GUIDE = [
@@ -1913,16 +1936,29 @@ function resetGame(){
 ========================================================= */
 function init(){
   updateZoneBanner(); updateHud(); updateJournal();
-  if(!speechSupported){ var sb = document.getElementById('btn-speak'); if(sb) sb.hidden = true; }
+  if(!speechSupported){
+    var speakBtns = document.querySelectorAll('.speak-btn');
+    for(var si=0; si<speakBtns.length; si++){ speakBtns[si].hidden = true; }
+  }
+  document.getElementById('btn-speak').setAttribute('data-label', 'Read this aloud');
   document.getElementById('btn-speak').addEventListener('click', toggleSpeak);
+  document.getElementById('btn-speak-zone').setAttribute('data-label', "Read this zone's description aloud");
+  document.getElementById('btn-speak-zone').addEventListener('click', function(){ speakFrom(this, getZoneSpeakText()); });
+  document.getElementById('btn-speak-journal').setAttribute('data-label', 'Read this journal tab aloud');
+  document.getElementById('btn-speak-journal').addEventListener('click', function(){ speakFrom(this, getJournalSpeakText()); });
+  document.getElementById('btn-speak-title').setAttribute('data-label', 'Read this introduction aloud');
+  document.getElementById('btn-speak-title').addEventListener('click', function(){ speakFrom(this, getElSpeakText('title-body')); });
+  document.getElementById('btn-speak-help').setAttribute('data-label', 'Read these instructions aloud');
+  document.getElementById('btn-speak-help').addEventListener('click', function(){ speakFrom(this, getElSpeakText('help-body')); });
 
   document.getElementById('btn-start').addEventListener('click', function(){
+    stopSpeaking();
     state.started = true;
     document.getElementById('overlay-title').hidden = true;
   });
 
   document.getElementById('btn-help').addEventListener('click', function(){ document.getElementById('overlay-help').hidden = false; });
-  document.getElementById('btn-help-close').addEventListener('click', function(){ document.getElementById('overlay-help').hidden = true; });
+  document.getElementById('btn-help-close').addEventListener('click', function(){ stopSpeaking(); document.getElementById('overlay-help').hidden = true; });
 
   document.getElementById('btn-reset').addEventListener('click', function(){ document.getElementById('overlay-reset').hidden = false; });
   document.getElementById('btn-reset-cancel').addEventListener('click', function(){ document.getElementById('overlay-reset').hidden = true; });
@@ -1962,6 +1998,7 @@ function init(){
       Array.prototype.forEach.call(document.querySelectorAll('.journal-tab'), function(t){ t.classList.remove('active'); });
       tab.classList.add('active');
       journalTab = tab.getAttribute('data-tab');
+      if(activeSpeakBtn && activeSpeakBtn.id === 'btn-speak-journal') stopSpeaking();
       updateJournal();
     });
   });
